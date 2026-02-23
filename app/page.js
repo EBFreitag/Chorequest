@@ -2,17 +2,25 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ============================================================
-// CHOREQUEST - Family Chore & Rewards App
-// Vercel KV version — data syncs across all devices
+// CHOREQUEST v2 — All fixes:
+// 1. Local-time Sunday 12:01 AM reset (no more UTC drift)
+// 2. Lifetime points that never reset
+// 3. Weekend lunch + dinner chores
+// 4. Cleaner progress bar
+// 5. Avatar picker on weekly wheel screen
 // ============================================================
+
+const AVATAR_OPTIONS = ["🦁", "🐉", "🦊", "🐺", "🦄", "🐸", "🦅", "🐙", "🦖", "🐯", "🐻", "🦈", "🐲", "🦇", "🐵", "🦜", "🐼", "🦀", "🐝", "🦋"];
 
 const getDefaultState = () => ({
   profiles: {
-    owen: { name: "Owen", avatar: "🦁", color: "#FF6B35", points: 0, wheelPrize: null, baselineEarned: false, hasSpun: false },
-    liam: { name: "Liam", avatar: "🐉", color: "#4ECDC4", points: 0, wheelPrize: null, baselineEarned: false, hasSpun: false },
+    owen: { name: "Owen", avatar: "🦁", color: "#FF6B35", points: 0, lifetimePoints: 0, wheelPrize: null, baselineEarned: false, hasSpun: false },
+    liam: { name: "Liam", avatar: "🐉", color: "#4ECDC4", points: 0, lifetimePoints: 0, wheelPrize: null, baselineEarned: false, hasSpun: false },
   },
   standingChores: [
-    { id: "dinner", name: "Eat dinner properly", points: 5, frequency: "daily", icon: "🍽️" },
+    { id: "dinner", name: "Eat dinner well", points: 5, frequency: "weekday", icon: "🍽️" },
+    { id: "lunch-weekend", name: "Eat lunch well", points: 5, frequency: "weekend", icon: "🥪" },
+    { id: "dinner-weekend", name: "Eat dinner well", points: 5, frequency: "weekend", icon: "🍽️" },
     { id: "shoes", name: "Shoes & backpacks away", points: 5, frequency: "daily", icon: "👟" },
     { id: "room-tue", name: "Clean room (Tuesday)", points: 15, frequency: "tuesday", icon: "🧹" },
     { id: "room-sat", name: "Clean room (Saturday)", points: 15, frequency: "saturday", icon: "🧹" },
@@ -38,29 +46,28 @@ const STRETCH = 180;
 const IPAD_MINUTES = 45;
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+// ---- ALL date functions use LOCAL time, not UTC ----
 function getDayOfWeek() { return new Date().getDay(); }
-function getTodayStr() { return new Date().toISOString().split("T")[0]; }
-function getWeekId() {
-  const d = new Date(); d.setDate(d.getDate() - d.getDay());
-  return d.toISOString().split("T")[0];
+
+function getTodayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-// ---- Storage helpers (Vercel KV via API routes) ----
+function getWeekId() {
+  // Returns the local-time Sunday date string for the current week
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  d.setDate(d.getDate() - d.getDay()); // back to Sunday
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// ---- Storage helpers ----
 async function loadData() {
-  try {
-    const res = await fetch("/api/data");
-    const json = await res.json();
-    return json.data || null;
-  } catch { return null; }
+  try { const res = await fetch("/api/data"); const json = await res.json(); return json.data || null; } catch { return null; }
 }
 async function saveData(data) {
-  try {
-    await fetch("/api/data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data }),
-    });
-  } catch (e) { console.error("Save error:", e); }
+  try { await fetch("/api/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data }) }); } catch (e) { console.error("Save error:", e); }
 }
 
 // ============================================================
@@ -77,15 +84,32 @@ const Confetti = ({ active }) => {
   return (
     <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 9999 }}>
       {pieces.map((p) => (
-        <div key={p.id} style={{
-          position: "absolute", left: `${p.left}%`, top: "-10px",
-          width: p.size, height: p.size, backgroundColor: p.color,
-          borderRadius: Math.random() > 0.5 ? "50%" : "2px",
-          animation: `confettiFall ${p.duration}s ${p.delay}s ease-in forwards`,
-          transform: `rotate(${p.rotation}deg)`,
-        }} />
+        <div key={p.id} style={{ position: "absolute", left: `${p.left}%`, top: "-10px", width: p.size, height: p.size, backgroundColor: p.color, borderRadius: Math.random() > 0.5 ? "50%" : "2px", animation: `confettiFall ${p.duration}s ${p.delay}s ease-in forwards`, transform: `rotate(${p.rotation}deg)` }} />
       ))}
       <style>{`@keyframes confettiFall { 0% { transform: translateY(0) rotate(0deg); opacity:1; } 100% { transform: translateY(100vh) rotate(720deg); opacity:0; } }`}</style>
+    </div>
+  );
+};
+
+// ============================================================
+// AVATAR PICKER
+// ============================================================
+const AvatarPicker = ({ current, onSelect, color }) => {
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#aaa", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, textAlign: "center" }}>Pick your avatar this week</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", maxWidth: 320, margin: "0 auto" }}>
+        {AVATAR_OPTIONS.map((a) => (
+          <button key={a} onClick={() => onSelect(a)} style={{
+            width: 48, height: 48, borderRadius: 14, border: current === a ? `3px solid ${color}` : "2px solid #333",
+            background: current === a ? `${color}22` : "#1a1a2e", fontSize: 28,
+            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+            transition: "all 0.15s", transform: current === a ? "scale(1.1)" : "scale(1)",
+          }}>
+            {a}
+          </button>
+        ))}
+      </div>
     </div>
   );
 };
@@ -110,76 +134,36 @@ const PrizeWheel = ({ items, onComplete, kidName, kidColor }) => {
     const size = canvas.width;
     const center = size / 2;
     const radius = center - 10;
-
     ctx.clearRect(0, 0, size, size);
-
-    ctx.beginPath();
-    ctx.arc(center, center, radius + 6, 0, 2 * Math.PI);
-    ctx.strokeStyle = "rgba(255,215,0,0.3)";
-    ctx.lineWidth = 4;
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(center + 3, center + 3, radius, 0, 2 * Math.PI);
-    ctx.fillStyle = "rgba(0,0,0,0.2)";
-    ctx.fill();
-
+    ctx.beginPath(); ctx.arc(center, center, radius + 6, 0, 2 * Math.PI); ctx.strokeStyle = "rgba(255,215,0,0.3)"; ctx.lineWidth = 4; ctx.stroke();
+    ctx.beginPath(); ctx.arc(center + 3, center + 3, radius, 0, 2 * Math.PI); ctx.fillStyle = "rgba(0,0,0,0.2)"; ctx.fill();
     const rotRad = (rotation * Math.PI) / 180;
-
     items.forEach((item, i) => {
       const angle = i * arcRad + rotRad;
-      ctx.beginPath();
-      ctx.moveTo(center, center);
-      ctx.arc(center, center, radius, angle, angle + arcRad);
-      ctx.closePath();
-      ctx.fillStyle = colors[i % colors.length];
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,0.8)";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
-      ctx.save();
-      ctx.translate(center, center);
-      ctx.rotate(angle + arcRad / 2);
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 13px 'Nunito', sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      const text = item.length > 16 ? item.substring(0, 14) + "…" : item;
-      ctx.fillText(text, radius * 0.58, 0);
+      ctx.beginPath(); ctx.moveTo(center, center); ctx.arc(center, center, radius, angle, angle + arcRad); ctx.closePath();
+      ctx.fillStyle = colors[i % colors.length]; ctx.fill(); ctx.strokeStyle = "rgba(255,255,255,0.8)"; ctx.lineWidth = 3; ctx.stroke();
+      ctx.save(); ctx.translate(center, center); ctx.rotate(angle + arcRad / 2);
+      ctx.fillStyle = "#fff"; ctx.font = "bold 13px 'Nunito', sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(item.length > 16 ? item.substring(0, 14) + "…" : item, radius * 0.58, 0);
       ctx.restore();
     });
-
-    ctx.beginPath();
-    ctx.arc(center, center, 26, 0, 2 * Math.PI);
-    ctx.fillStyle = "#1a1a2e";
-    ctx.fill();
-    ctx.strokeStyle = "#FFD700";
-    ctx.lineWidth = 3;
-    ctx.stroke();
-    ctx.fillStyle = "#FFD700";
-    ctx.font = "18px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("⭐", center, center);
+    ctx.beginPath(); ctx.arc(center, center, 26, 0, 2 * Math.PI); ctx.fillStyle = "#1a1a2e"; ctx.fill();
+    ctx.strokeStyle = "#FFD700"; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = "#FFD700"; ctx.font = "18px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("⭐", center, center);
   }, [items, rotation]);
 
   const spin = () => {
-    setPhase("spinning");
-    setResult(null);
+    setPhase("spinning"); setResult(null);
     const targetIdx = Math.floor(Math.random() * items.length);
     targetIdxRef.current = targetIdx;
     const segCenter = targetIdx * arcDeg + arcDeg / 2;
     const neededRot = ((270 - segCenter) % 360 + 360) % 360;
     const totalRotation = 2160 + neededRot;
-    let start = null;
-    const duration = 5000;
+    let start = null; const duration = 5000;
     const animate = (ts) => {
       if (!start) start = ts;
-      const elapsed = ts - start;
-      const progress = Math.min(elapsed / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 5);
-      setRotation(eased * totalRotation);
+      const progress = Math.min((ts - start) / duration, 1);
+      setRotation((1 - Math.pow(1 - progress, 5)) * totalRotation);
       if (progress < 1) requestAnimationFrame(animate);
       else { setResult(items[targetIdxRef.current]); setPhase("landed"); }
     };
@@ -196,10 +180,10 @@ const PrizeWheel = ({ items, onComplete, kidName, kidColor }) => {
       `}</style>
       <div style={{ position: "relative" }}>
         <div style={{ position: "absolute", top: -14, left: "50%", transform: "translateX(-50%)", width: 0, height: 0, borderLeft: "16px solid transparent", borderRight: "16px solid transparent", borderTop: "28px solid #FFD700", zIndex: 10, filter: "drop-shadow(0 3px 6px rgba(0,0,0,0.4))" }} />
-        <canvas ref={canvasRef} width={320} height={320} style={{ borderRadius: "50%", boxShadow: phase === "ready" ? "0 8px 40px rgba(255,215,0,0.2)" : "0 8px 40px rgba(255,215,0,0.4)", animation: phase === "ready" ? "glow 2s infinite" : "none" }} />
+        <canvas ref={canvasRef} width={320} height={320} style={{ borderRadius: "50%", boxShadow: "0 8px 40px rgba(255,215,0,0.3)", animation: phase === "ready" ? "glow 2s infinite" : "none" }} />
       </div>
       {phase === "ready" && (
-        <button onClick={spin} style={{ background: "linear-gradient(135deg, #FFD700, #FF6B35)", border: "none", borderRadius: 20, padding: "20px 56px", fontSize: 26, fontWeight: 900, color: "#fff", cursor: "pointer", fontFamily: "'Nunito', sans-serif", boxShadow: "0 6px 24px rgba(255,107,53,0.5)", animation: "glow 2s infinite", transition: "transform 0.15s" }}
+        <button onClick={spin} style={{ background: "linear-gradient(135deg, #FFD700, #FF6B35)", border: "none", borderRadius: 20, padding: "20px 56px", fontSize: 26, fontWeight: 900, color: "#fff", cursor: "pointer", fontFamily: "'Nunito', sans-serif", boxShadow: "0 6px 24px rgba(255,107,53,0.5)", animation: "glow 2s infinite" }}
           onMouseEnter={(e) => (e.target.style.transform = "scale(1.06)")} onMouseLeave={(e) => (e.target.style.transform = "scale(1)")}>
           🎰 SPIN!
         </button>
@@ -248,34 +232,60 @@ const PrizeBanner = ({ prize, points, color, earned }) => {
 };
 
 // ============================================================
-// PROGRESS BAR
+// PROGRESS BAR — REDESIGNED for clarity
 // ============================================================
 const ProgressBar = ({ points, profileColor }) => {
+  const baselinePct = Math.min((points / BASELINE) * 100, 100);
   const stretchPct = Math.min((points / STRETCH) * 100, 100);
-  const baselineMarker = (BASELINE / STRETCH) * 100;
+  const baselineMarkerPct = (BASELINE / STRETCH) * 100;
+
   return (
     <div style={{ width: "100%" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13, fontWeight: 700 }}>
-        <span>{points} pts</span>
-        <span style={{ color: points >= STRETCH ? "#FFD700" : points >= BASELINE ? "#4ECDC4" : "#999" }}>
-          {points >= STRETCH ? "🎡 STRETCH!" : points >= BASELINE ? "✅ BASELINE!" : `${BASELINE - points} to baseline`}
-        </span>
-      </div>
-      <div style={{ position: "relative", height: 28, background: "#1a1a2e", borderRadius: 14, overflow: "visible", boxShadow: "inset 0 2px 8px rgba(0,0,0,0.3)" }}>
+      {/* Main bar */}
+      <div style={{ position: "relative", height: 24, background: "#1a1a2e", borderRadius: 12, overflow: "hidden", border: "1px solid #2a2a4a" }}>
+        {/* Fill */}
         <div style={{
-          position: "absolute", height: "100%", borderRadius: 14, top: 0, left: 0, width: `${stretchPct}%`,
-          background: points >= STRETCH ? "linear-gradient(90deg, #FFD700, #FF6B35)" : points >= BASELINE ? `linear-gradient(90deg, ${profileColor}, #4ECDC4)` : `linear-gradient(90deg, ${profileColor}88, ${profileColor})`,
-          transition: "width 0.6s cubic-bezier(0.34,1.56,0.64,1)", boxShadow: points >= BASELINE ? `0 0 12px ${profileColor}66` : "none",
+          position: "absolute", height: "100%", borderRadius: 12, top: 0, left: 0,
+          width: `${stretchPct}%`,
+          background: points >= STRETCH
+            ? "linear-gradient(90deg, #FFD700, #FF6B35)"
+            : points >= BASELINE
+              ? `linear-gradient(90deg, ${profileColor}, #4ECDC4)`
+              : `linear-gradient(90deg, ${profileColor}99, ${profileColor})`,
+          transition: "width 0.6s cubic-bezier(0.34,1.56,0.64,1)",
         }} />
-        <div style={{ position: "absolute", left: `${baselineMarker}%`, top: 0, bottom: 0, width: 3, background: "#fff", opacity: 0.5, zIndex: 2 }} />
-        <div style={{ position: "absolute", left: `${baselineMarker}%`, top: -18, transform: "translateX(-50%)", fontSize: 10, fontWeight: 700, color: "#aaa" }}>{BASELINE}</div>
+        {/* Baseline divider line */}
+        <div style={{ position: "absolute", left: `${baselineMarkerPct}%`, top: 0, bottom: 0, width: 2, background: "rgba(255,255,255,0.4)", zIndex: 2 }} />
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 11, color: "#777" }}>
-        <span>0</span><span>{STRETCH} (stretch)</span>
+
+      {/* Labels below the bar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginTop: 8 }}>
+        <div style={{ fontSize: 20, fontWeight: 900, color: profileColor }}>{points}<span style={{ fontSize: 13, color: "#888", fontWeight: 600 }}> pts</span></div>
+        <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
+          <div style={{ textAlign: "center", padding: "4px 10px", borderRadius: 8, background: points >= BASELINE ? "rgba(78,205,196,0.15)" : "rgba(255,255,255,0.04)" }}>
+            <div style={{ fontWeight: 800, color: points >= BASELINE ? "#4ECDC4" : "#666" }}>{points >= BASELINE ? "✅" : "🔒"} {BASELINE}</div>
+            <div style={{ color: "#777", fontSize: 11 }}>iPad time</div>
+          </div>
+          <div style={{ textAlign: "center", padding: "4px 10px", borderRadius: 8, background: points >= STRETCH ? "rgba(255,215,0,0.15)" : "rgba(255,255,255,0.04)" }}>
+            <div style={{ fontWeight: 800, color: points >= STRETCH ? "#FFD700" : "#666" }}>{points >= STRETCH ? "🏆" : "🔒"} {STRETCH}</div>
+            <div style={{ color: "#777", fontSize: 11 }}>Prize!</div>
+          </div>
+        </div>
       </div>
     </div>
   );
 };
+
+// ============================================================
+// LIFETIME POINTS BADGE
+// ============================================================
+const LifetimeBadge = ({ lifetimePoints, color }) => (
+  <div style={{ display: "flex", alignItems: "center", gap: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: "5px 12px" }}>
+    <span style={{ fontSize: 14 }}>🏅</span>
+    <span style={{ fontSize: 13, fontWeight: 700, color }}>{lifetimePoints}</span>
+    <span style={{ fontSize: 11, color: "#777" }}>all-time</span>
+  </div>
+);
 
 // ============================================================
 // CHORE CARD
@@ -284,15 +294,23 @@ const ChoreCard = ({ chore, completions, onCheckOff, isParent, onVerify }) => {
   const today = getTodayStr();
   const todayCompletion = completions.find((c) => c.date === today && c.choreId === chore.id);
   const dayNum = getDayOfWeek();
-  let isDueToday = chore.frequency === "daily" || chore.frequency === "as-assigned"
-    || chore.frequency === "weekly" || chore.frequency === "one-off"
-    || (chore.frequency === "tuesday" && dayNum === 2)
-    || (chore.frequency === "saturday" && dayNum === 6);
-  const status = todayCompletion?.verified ? "verified" : todayCompletion?.done ? "pending" : "todo";
+  const isWeekend = dayNum === 0 || dayNum === 6;
+  const isWeekday = !isWeekend;
+
+  let isDueToday = false;
+  if (chore.frequency === "daily") isDueToday = true;
+  else if (chore.frequency === "weekday") isDueToday = isWeekday;
+  else if (chore.frequency === "weekend") isDueToday = isWeekend;
+  else if (chore.frequency === "as-assigned" || chore.frequency === "weekly" || chore.frequency === "one-off") isDueToday = true;
+  else if (chore.frequency === "tuesday") isDueToday = dayNum === 2;
+  else if (chore.frequency === "saturday") isDueToday = dayNum === 6;
+
   if (!isDueToday) return null;
+
+  const status = todayCompletion?.verified ? "verified" : todayCompletion?.done ? "pending" : "todo";
   const bg = { todo: "#1e1e32", pending: "#2d2600", verified: "#0d2e1f" };
   const bd = { todo: "#2e2e4a", pending: "#FFD700", verified: "#4ECDC4" };
-  const freqLabel = { daily: "Every day", tuesday: "Tuesday", saturday: "Saturday", "as-assigned": "As assigned", weekly: "This week", "one-off": "One-time" };
+  const freqLabel = { daily: "Every day", weekday: "Mon–Fri", weekend: "Sat & Sun", tuesday: "Tuesday", saturday: "Saturday", "as-assigned": "As assigned", weekly: "This week", "one-off": "One-time" };
 
   return (
     <div style={{ background: bg[status], border: `2px solid ${bd[status]}`, borderRadius: 16, padding: "14px 16px", display: "flex", alignItems: "center", gap: 12, transition: "all 0.3s", opacity: status === "verified" ? 0.7 : 1 }}>
@@ -304,9 +322,7 @@ const ChoreCard = ({ chore, completions, onCheckOff, isParent, onVerify }) => {
           <span style={{ background: "rgba(255,255,255,0.05)", borderRadius: 8, padding: "1px 8px", fontSize: 12, color: "#888" }}>{freqLabel[chore.frequency] || chore.frequency}</span>
         </div>
       </div>
-      {status === "todo" && !isParent && (
-        <button onClick={() => onCheckOff(chore.id)} style={{ background: "linear-gradient(135deg, #4ECDC4, #44A08D)", border: "none", borderRadius: 12, padding: "10px 16px", color: "#fff", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "'Nunito', sans-serif", boxShadow: "0 2px 8px rgba(78,205,196,0.3)" }}>Done! ✓</button>
-      )}
+      {status === "todo" && !isParent && <button onClick={() => onCheckOff(chore.id)} style={{ background: "linear-gradient(135deg, #4ECDC4, #44A08D)", border: "none", borderRadius: 12, padding: "10px 16px", color: "#fff", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "'Nunito', sans-serif", boxShadow: "0 2px 8px rgba(78,205,196,0.3)" }}>Done! ✓</button>}
       {status === "pending" && !isParent && <div style={{ background: "rgba(255,215,0,0.15)", borderRadius: 12, padding: "10px 12px", fontSize: 13, fontWeight: 700, color: "#FFD700" }}>⏳ Waiting</div>}
       {status === "pending" && isParent && (
         <div style={{ display: "flex", gap: 6 }}>
@@ -341,11 +357,7 @@ const PinEntry = ({ onSuccess, onCancel }) => {
             n !== null ? (
               <button key={i} onClick={() => {
                 if (n === "⌫") { setPin((p) => p.slice(0, -1)); setError(false); }
-                else if (pin.length < 4) {
-                  const np = pin + n;
-                  setPin(np);
-                  if (np.length === 4) { if (np === "1234") onSuccess(); else { setError(true); setTimeout(() => setPin(""), 500); } }
-                }
+                else if (pin.length < 4) { const np = pin + n; setPin(np); if (np.length === 4) { if (np === "1234") onSuccess(); else { setError(true); setTimeout(() => setPin(""), 500); } } }
               }} style={{ background: "#2a2a3e", border: "1px solid #444", borderRadius: 12, padding: "14px 0", color: "#fff", fontSize: 22, fontWeight: 700, cursor: "pointer", fontFamily: "'Nunito', sans-serif" }}>{n}</button>
             ) : <div key={i} />
           )}
@@ -368,9 +380,7 @@ function AddChoreModal({ kidName, onAdd, onClose }) {
         <h3 style={{ color: "#fff", margin: "0 0 20px" }}>Add Chore for {kidName}</h3>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Chore name..." style={{ width: "100%", padding: "12px 16px", borderRadius: 12, border: "2px solid #444", background: "#2a2a3e", color: "#fff", fontSize: 16, marginBottom: 12, fontFamily: "'Nunito', sans-serif", boxSizing: "border-box" }} />
         <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-          {[5, 10, 15].map((p) => (
-            <button key={p} onClick={() => setPoints(String(p))} style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: points === String(p) ? "#4ECDC4" : "#2a2a3e", color: "#fff", fontWeight: 800, cursor: "pointer", fontSize: 16, fontFamily: "'Nunito', sans-serif" }}>{p} pts</button>
-          ))}
+          {[5, 10, 15].map((p) => (<button key={p} onClick={() => setPoints(String(p))} style={{ flex: 1, padding: "10px", borderRadius: 10, border: "none", background: points === String(p) ? "#4ECDC4" : "#2a2a3e", color: "#fff", fontWeight: 800, cursor: "pointer", fontSize: 16, fontFamily: "'Nunito', sans-serif" }}>{p} pts</button>))}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onClose} style={{ flex: 1, padding: "12px", borderRadius: 12, border: "1px solid #444", background: "none", color: "#888", cursor: "pointer", fontWeight: 700, fontFamily: "'Nunito', sans-serif" }}>Cancel</button>
@@ -419,18 +429,28 @@ export default function ChoreQuest() {
   const [showAddChore, setShowAddChore] = useState(false);
   const [showAdjust, setShowAdjust] = useState(false);
   const [adjustKid, setAdjustKid] = useState(null);
+  const [pendingAvatar, setPendingAvatar] = useState(null);
 
   useEffect(() => {
     (async () => {
       try {
         const stored = await loadData();
         if (stored) {
+          // Always use latest chore definitions from code
           const fresh = getDefaultState();
           stored.standingChores = fresh.standingChores;
+          // Ensure lifetime points field exists (migration)
+          Object.keys(stored.profiles).forEach((k) => {
+            if (stored.profiles[k].lifetimePoints === undefined) stored.profiles[k].lifetimePoints = 0;
+          });
+          // Weekly reset — compare local-time week IDs
           const currentWeek = getWeekId();
           if (stored.weekStart !== currentWeek) {
-            stored.weekStart = currentWeek;
+            // Add this week's points to lifetime before resetting
             Object.keys(stored.profiles).forEach((k) => {
+              const weekPts = (stored.choreLog[k] || []).filter((c) => c.verified).reduce((s, c) => s + c.points, 0)
+                + (stored.pointAdjustments[k] || []).reduce((s, a) => s + a.amount, 0);
+              stored.profiles[k].lifetimePoints = (stored.profiles[k].lifetimePoints || 0) + Math.max(0, weekPts);
               stored.profiles[k].points = 0;
               stored.profiles[k].wheelPrize = null;
               stored.profiles[k].baselineEarned = false;
@@ -439,6 +459,7 @@ export default function ChoreQuest() {
             stored.choreLog = { owen: [], liam: [] };
             stored.pointAdjustments = { owen: [], liam: [] };
             stored.rotatingChores = { owen: [], liam: [] };
+            stored.weekStart = currentWeek;
           }
           setData(stored);
         } else {
@@ -455,10 +476,7 @@ export default function ChoreQuest() {
     })();
   }, []);
 
-  const save = useCallback(async (newData) => {
-    setData(newData);
-    await saveData(newData);
-  }, []);
+  const save = useCallback(async (newData) => { setData(newData); await saveData(newData); }, []);
 
   const calcPoints = useCallback((kidId) => {
     if (!data) return 0;
@@ -475,16 +493,10 @@ export default function ChoreQuest() {
 
   const verifyChore = (kidId, choreId, date, approved) => {
     const nd = { ...data, choreLog: { ...data.choreLog } };
-    nd.choreLog[kidId] = data.choreLog[kidId].map((c) =>
-      c.choreId === choreId && c.date === date ? (approved ? { ...c, verified: true } : null) : c
-    ).filter(Boolean);
-    const pts = nd.choreLog[kidId].filter((c) => c.verified).reduce((s, c) => s + c.points, 0)
-      + (nd.pointAdjustments[kidId] || []).reduce((s, a) => s + a.amount, 0);
+    nd.choreLog[kidId] = data.choreLog[kidId].map((c) => c.choreId === choreId && c.date === date ? (approved ? { ...c, verified: true } : null) : c).filter(Boolean);
+    const pts = nd.choreLog[kidId].filter((c) => c.verified).reduce((s, c) => s + c.points, 0) + (nd.pointAdjustments[kidId] || []).reduce((s, a) => s + a.amount, 0);
     nd.profiles = { ...data.profiles, [kidId]: { ...data.profiles[kidId], points: pts } };
-    if (pts >= BASELINE && !data.profiles[kidId].baselineEarned) {
-      nd.profiles[kidId].baselineEarned = true;
-      setConfetti(true); setTimeout(() => setConfetti(false), 3000);
-    }
+    if (pts >= BASELINE && !data.profiles[kidId].baselineEarned) { nd.profiles[kidId].baselineEarned = true; setConfetti(true); setTimeout(() => setConfetti(false), 3000); }
     save(nd);
   };
 
@@ -500,7 +512,9 @@ export default function ChoreQuest() {
   };
 
   const onWheelComplete = (kidId, prize) => {
-    save({ ...data, profiles: { ...data.profiles, [kidId]: { ...data.profiles[kidId], wheelPrize: prize, hasSpun: true } } });
+    const avatar = pendingAvatar || data.profiles[kidId].avatar;
+    save({ ...data, profiles: { ...data.profiles, [kidId]: { ...data.profiles[kidId], wheelPrize: prize, hasSpun: true, avatar } } });
+    setPendingAvatar(null);
     setConfetti(true);
     setTimeout(() => { setConfetti(false); setScreen("kid-dashboard"); }, 2500);
   };
@@ -510,6 +524,7 @@ export default function ChoreQuest() {
   if (loading || !data) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, #0f0c29, #302b63, #24243e)", fontFamily: "'Nunito', sans-serif", color: "#fff" }}>
+        <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
         <div style={{ textAlign: "center" }}>
           <div style={{ fontSize: 64, marginBottom: 16, animation: "pulse 1.5s infinite" }}>🎮</div>
           <div style={{ fontSize: 24, fontWeight: 800 }}>Loading ChoreQuest...</div>
@@ -521,6 +536,7 @@ export default function ChoreQuest() {
 
   const appShell = (children) => (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0f0c29, #302b63, #24243e)", fontFamily: "'Nunito', sans-serif", color: "#fff", padding: "20px 20px 100px" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
       <Confetti active={confetti} />
       {showPin && <PinEntry onSuccess={() => { setShowPin(false); if (pinAction) pinAction(); }} onCancel={() => setShowPin(false)} />}
       <style>{`@keyframes pulse { 0%,100% { transform:scale(1); } 50% { transform:scale(1.05); } }`}</style>
@@ -528,7 +544,9 @@ export default function ChoreQuest() {
     </div>
   );
 
+  // ============================================================
   // HOME
+  // ============================================================
   if (screen === "home") {
     return appShell(
       <div style={{ maxWidth: 600, margin: "0 auto", textAlign: "center", paddingTop: 20 }}>
@@ -542,14 +560,15 @@ export default function ChoreQuest() {
             const pts = calcPoints(id);
             const needsSpin = !profile.hasSpun;
             return (
-              <button key={id} onClick={() => { setActiveKid(id); setIsParent(false); setScreen(needsSpin ? "wheel" : "kid-dashboard"); }}
-                style={{ background: `linear-gradient(135deg, ${profile.color}22, ${profile.color}11)`, border: `3px solid ${profile.color}66`, borderRadius: 24, padding: "24px 32px", cursor: "pointer", transition: "all 0.2s", flex: 1, maxWidth: 260, fontFamily: "'Nunito', sans-serif" }}
+              <button key={id} onClick={() => { setActiveKid(id); setIsParent(false); setPendingAvatar(profile.avatar); setScreen(needsSpin ? "wheel" : "kid-dashboard"); }}
+                style={{ background: `linear-gradient(135deg, ${profile.color}22, ${profile.color}11)`, border: `3px solid ${profile.color}66`, borderRadius: 24, padding: "24px 28px", cursor: "pointer", transition: "all 0.2s", flex: 1, maxWidth: 260, fontFamily: "'Nunito', sans-serif" }}
                 onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.04)"; e.currentTarget.style.borderColor = profile.color; }}
                 onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; e.currentTarget.style.borderColor = profile.color + "66"; }}>
-                <div style={{ fontSize: 64, marginBottom: 8 }}>{profile.avatar}</div>
+                <div style={{ fontSize: 56, marginBottom: 6 }}>{profile.avatar}</div>
                 <div style={{ fontSize: 24, fontWeight: 900, color: "#fff" }}>{profile.name}</div>
+                <LifetimeBadge lifetimePoints={(profile.lifetimePoints || 0) + Math.max(0, pts)} color={profile.color} />
                 {needsSpin ? (
-                  <div style={{ marginTop: 14, background: "linear-gradient(135deg, #FFD700, #FF6B35)", borderRadius: 14, padding: "10px 16px", fontSize: 16, fontWeight: 800, color: "#fff", animation: "pulse 1.5s infinite" }}>🎡 Spin Your Wheel!</div>
+                  <div style={{ marginTop: 12, background: "linear-gradient(135deg, #FFD700, #FF6B35)", borderRadius: 14, padding: "10px 16px", fontSize: 16, fontWeight: 800, color: "#fff", animation: "pulse 1.5s infinite" }}>🎡 Spin Your Wheel!</div>
                 ) : (
                   <>
                     {profile.wheelPrize && <div style={{ marginTop: 10, background: pts >= STRETCH ? "linear-gradient(135deg, #FFD700, #FF6B35)" : "rgba(255,215,0,0.12)", border: pts >= STRETCH ? "none" : "1px solid rgba(255,215,0,0.25)", borderRadius: 12, padding: "6px 12px", fontSize: 13, fontWeight: 700, color: pts >= STRETCH ? "#fff" : "#FFD700" }}>{pts >= STRETCH ? "🎉 " : "🎯 "}{profile.wheelPrize}</div>}
@@ -561,7 +580,7 @@ export default function ChoreQuest() {
           })}
         </div>
         <button onClick={() => requestPin(() => { setIsParent(true); setScreen("parent-panel"); })}
-          style={{ background: "rgba(255,255,255,0.06)", border: "2px solid rgba(255,255,255,0.15)", borderRadius: 16, padding: "16px 32px", color: "#aaa", fontSize: 16, fontWeight: 700, cursor: "pointer", fontFamily: "'Nunito', sans-serif", transition: "all 0.2s" }}
+          style={{ background: "rgba(255,255,255,0.06)", border: "2px solid rgba(255,255,255,0.15)", borderRadius: 16, padding: "16px 32px", color: "#aaa", fontSize: 16, fontWeight: 700, cursor: "pointer", fontFamily: "'Nunito', sans-serif" }}
           onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.1)"; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}>
           🔒 Parent / Babysitter
@@ -570,18 +589,24 @@ export default function ChoreQuest() {
     );
   }
 
-  // WHEEL
+  // ============================================================
+  // WHEEL (with avatar picker)
+  // ============================================================
   if (screen === "wheel" && activeKid) {
     const profile = data.profiles[activeKid];
     return appShell(
       <div style={{ maxWidth: 500, margin: "0 auto", textAlign: "center", paddingTop: 20 }}>
-        <button onClick={() => { setScreen("home"); setActiveKid(null); }} style={{ position: "absolute", top: 24, left: 24, background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 12, padding: "8px 14px", color: "#fff", cursor: "pointer", fontSize: 18 }}>←</button>
-        <div style={{ fontSize: 60, marginBottom: 8 }}>{profile.avatar}</div>
+        <button onClick={() => { setScreen("home"); setActiveKid(null); setPendingAvatar(null); }} style={{ position: "absolute", top: 24, left: 24, background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 12, padding: "8px 14px", color: "#fff", cursor: "pointer", fontSize: 18 }}>←</button>
+        <div style={{ fontSize: 60, marginBottom: 8 }}>{pendingAvatar || profile.avatar}</div>
         <h2 style={{ margin: "0 0 4px", fontSize: 30, fontWeight: 900, color: profile.color }}>{profile.name}</h2>
-        <p style={{ color: "#888", marginBottom: 28, fontSize: 17 }}>{profile.hasSpun ? "You already spun this week!" : "Spin to see what you're working for this week!"}</p>
-        {!profile.hasSpun ? (
-          <PrizeWheel items={data.prizeWheelItems} onComplete={(prize) => onWheelComplete(activeKid, prize)} kidName={profile.name} kidColor={profile.color} />
-        ) : (
+        <p style={{ color: "#888", marginBottom: 16, fontSize: 17 }}>{profile.hasSpun ? "You already spun this week!" : "Pick your avatar & spin!"}</p>
+        {!profile.hasSpun && (
+          <>
+            <AvatarPicker current={pendingAvatar || profile.avatar} onSelect={setPendingAvatar} color={profile.color} />
+            <PrizeWheel items={data.prizeWheelItems} onComplete={(prize) => onWheelComplete(activeKid, prize)} kidName={profile.name} kidColor={profile.color} />
+          </>
+        )}
+        {profile.hasSpun && (
           <div>
             <PrizeBanner prize={profile.wheelPrize} points={calcPoints(activeKid)} color={profile.color} earned={calcPoints(activeKid) >= STRETCH} />
             <button onClick={() => setScreen("kid-dashboard")} style={{ background: `linear-gradient(135deg, ${profile.color}, ${profile.color}cc)`, border: "none", borderRadius: 16, padding: "16px 40px", fontSize: 18, fontWeight: 800, color: "#fff", cursor: "pointer", fontFamily: "'Nunito', sans-serif" }}>Go to Chores →</button>
@@ -591,52 +616,46 @@ export default function ChoreQuest() {
     );
   }
 
+  // ============================================================
   // KID DASHBOARD
+  // ============================================================
   if (screen === "kid-dashboard" && activeKid) {
     const profile = data.profiles[activeKid];
     const pts = calcPoints(activeKid);
     const allChores = [...data.standingChores, ...(data.rotatingChores[activeKid] || [])];
     const log = data.choreLog[activeKid] || [];
+    const totalLifetime = (profile.lifetimePoints || 0) + Math.max(0, pts);
+
     return appShell(
       <div style={{ maxWidth: 500, margin: "0 auto" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
           <button onClick={() => { setScreen("home"); setActiveKid(null); }} style={{ background: "rgba(255,255,255,0.1)", border: "none", borderRadius: 12, padding: "8px 14px", color: "#fff", cursor: "pointer", fontSize: 18 }}>←</button>
           <div style={{ fontSize: 38 }}>{profile.avatar}</div>
-          <div>
+          <div style={{ flex: 1 }}>
             <h2 style={{ margin: 0, fontSize: 26, fontWeight: 900, color: profile.color }}>{profile.name}</h2>
             <p style={{ margin: 0, color: "#888", fontSize: 13 }}>{DAYS[getDayOfWeek()]}'s Quests</p>
           </div>
+          <LifetimeBadge lifetimePoints={totalLifetime} color={profile.color} />
         </div>
+
         {profile.wheelPrize && <PrizeBanner prize={profile.wheelPrize} points={pts} color={profile.color} earned={pts >= STRETCH} />}
+
         <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 20, padding: 20, marginBottom: 20 }}>
-          <div style={{ textAlign: "center", marginBottom: 14 }}>
-            <span style={{ fontSize: 44, fontWeight: 900, color: profile.color }}>{pts}</span>
-            <span style={{ fontSize: 18, color: "#888", marginLeft: 8 }}>points</span>
-          </div>
           <ProgressBar points={pts} profileColor={profile.color} />
-          <div style={{ display: "flex", justifyContent: "center", gap: 24, marginTop: 14, fontSize: 12 }}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ color: pts >= BASELINE ? "#4ECDC4" : "#666", fontWeight: 800, fontSize: 14 }}>{pts >= BASELINE ? "✅" : "🔒"} Baseline</div>
-              <div style={{ color: "#777" }}>{BASELINE} pts = {IPAD_MINUTES} min iPad</div>
-            </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ color: pts >= STRETCH ? "#FFD700" : "#666", fontWeight: 800, fontSize: 14 }}>{pts >= STRETCH ? "🏆" : "🔒"} Stretch</div>
-              <div style={{ color: "#777" }}>{STRETCH} pts = Prize!</div>
-            </div>
-          </div>
         </div>
+
         {pts >= STRETCH && profile.wheelPrize && (
           <div style={{ background: "linear-gradient(135deg, #FFD700, #FF6B35)", borderRadius: 16, padding: 20, marginBottom: 20, textAlign: "center", animation: "pulse 2s infinite" }}>
             <div style={{ fontSize: 28, fontWeight: 900, color: "#fff" }}>🎉 You earned your prize!</div>
             <div style={{ fontSize: 20, color: "rgba(255,255,255,0.9)", marginTop: 4 }}>{profile.wheelPrize}</div>
           </div>
         )}
+
         <h3 style={{ fontSize: 16, fontWeight: 800, marginBottom: 10, color: "#aaa", textTransform: "uppercase", letterSpacing: 1 }}>Today's Chores</h3>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {allChores.map((chore) => (
-            <ChoreCard key={chore.id} chore={chore} completions={log} onCheckOff={(cid) => checkOffChore(activeKid, cid)} isParent={false} onVerify={() => {}} />
-          ))}
+          {allChores.map((chore) => (<ChoreCard key={chore.id} chore={chore} completions={log} onCheckOff={(cid) => checkOffChore(activeKid, cid)} isParent={false} onVerify={() => {}} />))}
         </div>
+
         {(data.pointAdjustments[activeKid] || []).length > 0 && (
           <div style={{ marginTop: 24 }}>
             <h3 style={{ fontSize: 16, fontWeight: 800, marginBottom: 10, color: "#aaa", textTransform: "uppercase", letterSpacing: 1 }}>Bonus & Deductions</h3>
@@ -661,7 +680,9 @@ export default function ChoreQuest() {
     );
   }
 
+  // ============================================================
   // PARENT PANEL
+  // ============================================================
   if (screen === "parent-panel") {
     return appShell(
       <div style={{ maxWidth: 600, margin: "0 auto" }}>
@@ -674,14 +695,16 @@ export default function ChoreQuest() {
           const log = data.choreLog[kidId] || [];
           const allChores = [...data.standingChores, ...(data.rotatingChores[kidId] || [])];
           const pendingChores = log.filter((c) => c.done && !c.verified);
+          const totalLifetime = (profile.lifetimePoints || 0) + Math.max(0, pts);
           return (
             <div key={kidId} style={{ background: "rgba(255,255,255,0.04)", border: `2px solid ${profile.color}33`, borderRadius: 20, padding: 24, marginBottom: 20 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
                 <span style={{ fontSize: 36 }}>{profile.avatar}</span>
                 <div style={{ flex: 1 }}>
                   <h3 style={{ margin: 0, color: profile.color, fontWeight: 900, fontSize: 20 }}>{profile.name}</h3>
-                  <div style={{ display: "flex", gap: 10, fontSize: 13, color: "#888", marginTop: 2 }}>
-                    <span>{pts} pts</span>
+                  <div style={{ display: "flex", gap: 10, fontSize: 13, color: "#888", marginTop: 2, flexWrap: "wrap" }}>
+                    <span>{pts} pts this week</span>
+                    <span>🏅 {totalLifetime} all-time</span>
                     {profile.wheelPrize && <span>🏆 {profile.wheelPrize}</span>}
                     {!profile.hasSpun && <span style={{ color: "#FFD700" }}>🎡 Hasn't spun yet</span>}
                   </div>
@@ -693,11 +716,7 @@ export default function ChoreQuest() {
                 <div style={{ marginTop: 16 }}>
                   <h4 style={{ margin: "0 0 8px", fontSize: 14, color: "#FFD700", fontWeight: 800 }}>⏳ Pending ({pendingChores.length})</h4>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {allChores.map((chore) => {
-                      const pending = log.find((c) => c.choreId === chore.id && c.done && !c.verified);
-                      if (!pending) return null;
-                      return <ChoreCard key={chore.id} chore={chore} completions={log} isParent={true} onCheckOff={() => {}} onVerify={(cid, date, ok) => verifyChore(kidId, cid, date, ok)} />;
-                    })}
+                    {allChores.map((chore) => { const p = log.find((c) => c.choreId === chore.id && c.done && !c.verified); if (!p) return null; return <ChoreCard key={chore.id} chore={chore} completions={log} isParent={true} onCheckOff={() => {}} onVerify={(cid, date, ok) => verifyChore(kidId, cid, date, ok)} />; })}
                   </div>
                 </div>
               )}
@@ -705,9 +724,7 @@ export default function ChoreQuest() {
               <button onClick={() => { setActiveKid(kidId); setShowAddChore(true); }} style={{ marginTop: 12, width: "100%", background: "rgba(255,255,255,0.05)", border: "1px dashed rgba(255,255,255,0.2)", borderRadius: 12, padding: "10px", color: "#888", cursor: "pointer", fontSize: 14, fontWeight: 700, fontFamily: "'Nunito', sans-serif" }}>+ Add Rotating Chore</button>
               {(data.rotatingChores[kidId] || []).length > 0 && (
                 <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {data.rotatingChores[kidId].map((rc) => (
-                    <span key={rc.id} style={{ background: "rgba(255,255,255,0.08)", borderRadius: 8, padding: "3px 10px", fontSize: 12, color: "#aaa" }}>{rc.name} (+{rc.points})</span>
-                  ))}
+                  {data.rotatingChores[kidId].map((rc) => (<span key={rc.id} style={{ background: "rgba(255,255,255,0.08)", borderRadius: 8, padding: "3px 10px", fontSize: 12, color: "#aaa" }}>{rc.name} (+{rc.points})</span>))}
                 </div>
               )}
             </div>

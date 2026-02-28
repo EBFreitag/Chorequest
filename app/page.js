@@ -292,7 +292,6 @@ const LifetimeBadge = ({ lifetimePoints, color }) => (
 // ============================================================
 const ChoreCard = ({ chore, completions, onCheckOff, isParent, onVerify }) => {
   const today = getTodayStr();
-  const todayCompletion = completions.find((c) => c.date === today && c.choreId === chore.id);
   const dayNum = getDayOfWeek();
   const isWeekend = dayNum === 0 || dayNum === 6;
   const isWeekday = !isWeekend;
@@ -307,7 +306,14 @@ const ChoreCard = ({ chore, completions, onCheckOff, isParent, onVerify }) => {
 
   if (!isDueToday) return null;
 
-  const status = todayCompletion?.verified ? "verified" : todayCompletion?.done ? "pending" : "todo";
+  // Daily/weekday/weekend chores reset each day — only check today's date
+  // Weekly/one-off/as-assigned chores persist all week — check any completion this week
+  const resetsDaily = chore.frequency === "daily" || chore.frequency === "weekday" || chore.frequency === "weekend";
+  const completion = resetsDaily
+    ? completions.find((c) => c.date === today && c.choreId === chore.id)
+    : completions.find((c) => c.choreId === chore.id);
+
+  const status = completion?.verified ? "verified" : completion?.done ? "pending" : "todo";
   const bg = { todo: "#1e1e32", pending: "#2d2600", verified: "#0d2e1f" };
   const bd = { todo: "#2e2e4a", pending: "#FFD700", verified: "#4ECDC4" };
   const freqLabel = { daily: "Every day", weekday: "Mon–Fri", weekend: "Sat & Sun", tuesday: "Tuesday", saturday: "Saturday", "as-assigned": "As assigned", weekly: "This week", "one-off": "One-time" };
@@ -326,8 +332,8 @@ const ChoreCard = ({ chore, completions, onCheckOff, isParent, onVerify }) => {
       {status === "pending" && !isParent && <div style={{ background: "rgba(255,215,0,0.15)", borderRadius: 12, padding: "10px 12px", fontSize: 13, fontWeight: 700, color: "#FFD700" }}>⏳ Waiting</div>}
       {status === "pending" && isParent && (
         <div style={{ display: "flex", gap: 6 }}>
-          <button onClick={() => onVerify(chore.id, today, true)} style={{ background: "#4ECDC4", border: "none", borderRadius: 10, padding: "8px 14px", color: "#fff", fontWeight: 800, cursor: "pointer", fontFamily: "'Nunito', sans-serif" }}>✓</button>
-          <button onClick={() => onVerify(chore.id, today, false)} style={{ background: "#FF6B6B", border: "none", borderRadius: 10, padding: "8px 14px", color: "#fff", fontWeight: 800, cursor: "pointer", fontFamily: "'Nunito', sans-serif" }}>✗</button>
+          <button onClick={() => onVerify(chore.id, completion.date, true)} style={{ background: "#4ECDC4", border: "none", borderRadius: 10, padding: "8px 14px", color: "#fff", fontWeight: 800, cursor: "pointer", fontFamily: "'Nunito', sans-serif" }}>✓</button>
+          <button onClick={() => onVerify(chore.id, completion.date, false)} style={{ background: "#FF6B6B", border: "none", borderRadius: 10, padding: "8px 14px", color: "#fff", fontWeight: 800, cursor: "pointer", fontFamily: "'Nunito', sans-serif" }}>✗</button>
         </div>
       )}
       {status === "verified" && <div style={{ fontSize: 26 }}>✅</div>}

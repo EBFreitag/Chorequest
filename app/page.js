@@ -36,7 +36,7 @@ const getDefaultState = () => ({
     liam: ["Extra 15 min iPad", "Pick what's for dinner", "Stay up 15 min late", "Pick the family movie", "Small treat from store"],
   },
   weekStart: null,
-  pin: "1234",
+  pin: "6768",
 });
 
 const BASELINE = 150;

@@ -342,7 +342,10 @@ const ChoreCard = ({ chore, completions, onCheckOff, isParent, onVerify }) => {
   else if (chore.frequency === "saturday") isDueToday = dayNum === 6;
   if (!isDueToday) return null;
 
-  const resetsDaily = chore.frequency === "daily" || chore.frequency === "weekday" || chore.frequency === "weekend";
+  // FIX: "as-assigned" chores now reset daily (filter by today's date),
+  // while "weekly" and "one-off" chores persist until completed for the week.
+  const resetsDaily = ["daily", "weekday", "weekend", "tuesday", "saturday", "as-assigned"].includes(chore.frequency);
+
   const completion = resetsDaily
     ? completions.find((c) => c.date === today && c.choreId === chore.id)
     : completions.find((c) => c.choreId === chore.id);
@@ -822,7 +825,7 @@ export default function ChoreQuest() {
           const allChores = [...data.standingChores, ...(data.rotatingChores[kidId] || [])];
           const today = getTodayStr();
           const trulyPending = allChores.filter((chore) => {
-            const resetsDaily = chore.frequency === "daily" || chore.frequency === "weekday" || chore.frequency === "weekend";
+            const resetsDaily = ["daily", "weekday", "weekend", "tuesday", "saturday", "as-assigned"].includes(chore.frequency);
             const completion = resetsDaily ? log.find((c) => c.date === today && c.choreId === chore.id) : log.find((c) => c.choreId === chore.id);
             return completion && completion.done && !completion.verified;
           });
